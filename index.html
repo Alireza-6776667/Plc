@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PLC Ladder Editor</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #1e1e1e);
+    --fg: var(--tg-theme-text-color, #eeeeee);
+    --hint: var(--tg-theme-hint-color, #999999);
+    --btn: var(--tg-theme-button-color, #3b82f6);
+    --btn-fg: var(--tg-theme-button-text-color, #ffffff);
+    --panel: var(--tg-theme-secondary-bg-color, #2a2a2a);
+    --wire: #22c55e;
+    --sel: #f59e0b;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    font-family: system-ui, -apple-system, "Vazirmatn", Tahoma, sans-serif;
+    background: var(--bg); color: var(--fg);
+  }
+  body { display: flex; flex-direction: column; }
+
+  header {
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 8px;
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
+    background: var(--panel);
+  }
+  button {
+    background: var(--btn); color: var(--btn-fg);
+    border: 0; border-radius: 8px; padding: 8px 10px; font-size: 13px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--hint); }
+  button.danger { background: var(--danger); color: #fff; }
+
+  #canvas { flex: 1; overflow: auto; padding: 12px; }
+
+  .rung { display: flex; align-items: center; margin: 14px 0; min-width: max-content; }
+  .num { width: 30px; font-size: 12px; color: var(--hint); direction: ltr; }
+  .rail { width: 4px; height: 70px; background: var(--wire); border-radius: 2px; }
+  .rung > button { margin-inline-start: 10px; }
+
+  .cell {
+    width: 86px; height: 70px; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; border: 1px dashed transparent; border-radius: 6px;
+  }
+  .cell::before {               /* the wire running through every cell */
+    content: ""; position: absolute; left: 0; right: 0; top: 50%;
+    height: 2px; background: var(--wire);
+  }
+  .cell:hover { border-color: var(--hint); }
+  .cell.sel { border-color: var(--sel); background: rgba(245, 158, 11, .10); }
+  .sym {
+    position: relative; z-index: 1; padding: 0 4px;
+    background: var(--bg); font-family: ui-monospace, Consolas, monospace;
+    font-size: 18px; font-weight: bold; white-space: nowrap; direction: ltr;
+  }
+  .tag, .par {
+    position: absolute; z-index: 1; left: 50%; transform: translateX(-50%);
+    font-size: 11px; background: var(--bg); padding: 0 3px; white-space: nowrap;
+    direction: ltr; font-family: ui-monospace, Consolas, monospace;
+  }
+  .tag { top: 4px; }
+  .par { bottom: 4px; color: var(--sel); }
+  .block .sym { color: #60a5fa; border: 1px solid #60a5fa; border-radius: 4px; padding: 2px 6px; }
+
+  #panel {
+    display: none; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 10px; background: var(--panel);
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  #panel label { font-size: 12px; color: var(--hint); }
+  #panel select, #panel input {
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--hint); border-radius: 6px; padding: 6px; font-size: 14px;
+  }
+  #panel input { width: 110px; direction: ltr; }
+
+  #hint { padding: 8px 12px; font-size: 12px; color: var(--hint); }
+
+  #preview {
+    display: none; margin: 8px; padding: 10px; border-radius: 8px;
+    background: var(--panel); font-family: ui-monospace, Consolas, monospace;
+    font-size: 13px; white-space: pre; overflow: auto; direction: ltr;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <button onclick="addRung()">＋ ردیف</button>
+  <button onclick="togglePreview()">👁 پیش‌نمایش</button>
+  <button class="ghost" onclick="saveLocal()">💾 ذخیره</button>
+  <button class="ghost" onclick="clearAll()">🗑 پاک‌کردن همه</button>
+  <button onclick="sendToBot()">📤 ارسال به ربات</button>
+</header>
+
+<div id="canvas"></div>
+<div id="hint">برای ویرایش، روی یک خانه بزنید. کلید Delete خانه‌ی انتخابی را پاک می‌کند.</div>
+<pre id="preview"></pre>
+
+<div id="panel">
+  <label>نوع:
+    <select id="ptype" onchange="applyPanel()">
+      <option value="EMPTY">— خالی (سیم)</option>
+      <option value="NO">-| |- کنتاکت باز</option>
+      <option value="NC">-|/|- کنتاکت بسته</option>
+      <option value="COIL">-( )- کویل</option>
+      <option value="SET">-(S)- ست</option>
+      <option value="RESET">-(R)- ریست</option>
+      <option value="TON">TON تایمر</option>
+      <option value="CTU">CTU شمارنده</option>
+    </select>
+  </label>
+  <label>نام:
+    <input id="ptag" placeholder="I0.0" oninput="applyPanel()">
+  </label>
+  <label id="paramLabel">مقدار:
+    <input id="pparam" placeholder="" oninput="applyPanel()">
+  </label>
+</div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const COLS = 8;
+const STORAGE_KEY = "plc-ladder-v1";
+const SYMBOLS = {
+  EMPTY: "",
+  NO: "-| |-",
+  NC: "-|/|-",
+  COIL: "-( )-",
+  SET: "-(S)-",
+  RESET: "-(R)-",
+  TON: "TON",
+  CTU: "CTU",
+};
+const BLOCKS = new Set(["TON", "CTU"]);
+
+const newRung = () => ({ cells: Array(COLS).fill(null) });
+
+const sample = () => ({
+  rungs: [{
+    cells: [
+      { type: "NO", tag: "I0.0", param: "" },
+      { type: "NC", tag: "I0.1", param: "" },
+      null, null, null, null, null,
+      { type: "COIL", tag: "Q0.0", param: "" },
+    ],
+  }],
+});
+
+let rungs = loadLocal() || sample().rungs;
+let sel = null; // { r, c }
+
+/* ---------- storage ---------- */
+function saveLocal() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(rungs)); toast("ذخیره شد"); }
+  catch (e) { toast("ذخیره‌سازی ممکن نیست"); }
+}
+function loadLocal() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    return Array.isArray(d) && d.length ? d : null;
+  } catch { return null; }
+}
+function toast(msg) {
+  const h = document.getElementById("hint");
+  const old = h.textContent;
+  h.textContent = msg;
+  setTimeout(() => (h.textContent = old), 1200);
+}
+
+/* ---------- rendering ---------- */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function render() {
+  const cv = document.getElementById("canvas");
+  cv.innerHTML = "";
+  rungs.forEach((rung, r) => {
+    const row = document.createElement("div");
+    row.className = "rung";
+    row.innerHTML = `<div class="num">${r + 1}</div><div class="rail"></div>`;
+
+    rung.cells.forEach((cell, c) => {
+      const d = document.createElement("div");
+      const isSel = sel && sel.r === r && sel.c === c;
+      d.className = "cell" + (isSel ? " sel" : "") + (cell && BLOCKS.has(cell.type) ? " block" : "");
+      const type = cell ? cell.type : "EMPTY";
+      d.innerHTML =
+        (cell && cell.tag ? `<span class="tag">${esc(cell.tag)}</span>` : "") +
+        `<span class="sym">${SYMBOLS[type]}</span>` +
+        (cell && cell.param ? `<span class="par">${esc(cell.param)}</span>` : "");
+      d.onclick = () => select(r, c);
+      row.appendChild(d);
+    });
+
+    row.insertAdjacentHTML("beforeend", `<div class="rail"></div>`);
+    const del = document.createElement("button");
+    del.className = "ghost danger";
+    del.textContent = "✕";
+    del.title = "حذف ردیف";
+    del.onclick = () => deleteRung(r);
+    row.appendChild(del);
+    cv.appendChild(row);
+  });
+  updatePreview();
+}
+
+function select(r, c) {
+  sel = { r, c };
+  render();
+  fillPanel();
+}
+
+function fillPanel() {
+  const panel = document.getElementById("panel");
+  if (!sel) { panel.style.display = "none"; return; }
+  panel.style.display = "flex";
+  const cell = rungs[sel.r].cells[sel.c] || { type: "EMPTY", tag: "", param: "" };
+  document.getElementById("ptype").value = cell.type;
+  document.getElementById("ptag").value = cell.tag || "";
+  document.getElementById("pparam").value = cell.param || "";
+
+  const isTimer = cell.type === "TON";
+  const isCounter = cell.type === "CTU";
+  document.getElementById("paramLabel").style.display = (isTimer || isCounter) ? "" : "none";
+  document.getElementById("pparam").placeholder = isTimer ? "مثلاً 5s" : "مثلاً 10";
+}
+
+function applyPanel() {
+  if (!sel) return;
+  const type = document.getElementById("ptype").value;
+  let tag = document.getElementById("ptag").value.trim();
+  let param = document.getElementById("pparam").value.trim();
+
+  if (type === "EMPTY") {
+    rungs[sel.r].cells[sel.c] = null;
+  } else {
+    if (type === "TON" && !param) param = "5s";
+    if (type === "CTU" && !param) param = "10";
+    if (type !== "TON" && type !== "CTU") param = "";
+    rungs[sel.r].cells[sel.c] = { type, tag, param };
+  }
+  render();
+  fillPanel();
+}
+
+function addRung() {
+  rungs.push(newRung());
+  render();
+}
+
+function deleteRung(r) {
+  rungs.splice(r, 1);
+  if (!rungs.length) rungs.push(newRung());
+  sel = null;
+  document.getElementById("panel").style.display = "none";
+  render();
+}
+
+function clearAll() {
+  if (!confirm("همه‌ی ردیف‌ها پاک شوند؟")) return;
+  rungs = [newRung()];
+  sel = null;
+  document.getElementById("panel").style.display = "none";
+  render();
+}
+
+/* ---------- preview & send ---------- */
+function ladderText() {
+  return rungs.map((r, i) => {
+    const toks = r.cells.filter(Boolean).map(c => {
+      switch (c.type) {
+        case "NO": return `[ ${c.tag} ]`;
+        case "NC": return `[/ ${c.tag} ]`;
+        case "COIL": return `( ${c.tag} )`;
+        case "SET": return `(S ${c.tag})`;
+        case "RESET": return `(R ${c.tag})`;
+        case "TON": return `[TON ${c.tag} PT=${c.param}]`;
+        case "CTU": return `[CTU ${c.tag} PV=${c.param}]`;
+        default: return "?";
+      }
+    });
+    return `${String(i + 1).padStart(2)}  |--${toks.join("--")}--|`;
+  }).join("\n");
+}
+
+function updatePreview() {
+  const p = document.getElementById("preview");
+  if (p.style.display === "block") p.textContent = ladderText();
+}
+
+function togglePreview() {
+  const p = document.getElementById("preview");
+  p.style.display = p.style.display === "block" ? "none" : "block";
+  updatePreview();
+}
+
+function sendToBot() {
+  const payload = JSON.stringify({ v: 1, rungs: rungs.map(r => ({ cells: r.cells })) });
+  if (new TextEncoder().encode(payload).length > 4000) {
+    alert("برنامه برای ارسال بزرگ است. تعداد ردیف‌ها را کم کنید.");
+    return;
+  }
+  if (!tg || !tg.initData) {
+    alert("ارسال فقط داخل تلگرام کار می‌کند.");
+    return;
+  }
+  tg.sendData(payload);
+}
+
+/* ---------- keyboard ---------- */
+document.addEventListener("keydown", e => {
+  if ((e.key === "Delete" || e.key === "Backspace") && sel && e.target.tagName !== "INPUT") {
+    rungs[sel.r].cells[sel.c] = null;
+    render();
+    fillPanel();
+  }
+});
+
+render();
+</script>
+</body>
+</html>
